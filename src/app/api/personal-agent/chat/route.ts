@@ -1,11 +1,13 @@
 
+
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { personal_sessions, personal_messages } from "@/db/schema";
 import { auth } from "@/lib/auth";
 import { eq, desc } from "drizzle-orm";
-import { model, SYSTEM_PROMPT } from "@/lib/geminiAgent";
+import { getModel, SYSTEM_PROMPT } from "@/lib/geminiAgent";
 import { Content } from "@google/generative-ai";
+import { getRelevantContext } from "@/lib/rag";
 
 export async function POST(req: Request) {
     try {
@@ -71,9 +73,19 @@ export async function POST(req: Request) {
 
         const chatHistory = sanitizedHistory;
 
+        // --- RAG RETRIEVAL ---
+        console.log("Retrieving knowledge base context...");
+        const ragContext = await getRelevantContext(message);
+        const ragPromptSection = ragContext ? `
+    RELEVANT KNOWLEDGE BASE CONTEXT (Use this to guide your response if applicable):
+    ${ragContext}
+    ` : "";
+
         // Add system context frame
         const contextPrompt = `
       ${SYSTEM_PROMPT}
+
+      ${ragPromptSection}
 
       New personal support session started.
       User details:
@@ -92,6 +104,7 @@ export async function POST(req: Request) {
 
         // We use a fresh generation each time with history as context, or use chatSession.
         // For simplicity and strict control, we'll prompt with history + instruction
+        const model = getModel();
         const chat = model.startChat({
             history: chatHistory
         });
@@ -128,3 +141,4 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Internal Server Error" }, { status: 500 });
     }
 }
+

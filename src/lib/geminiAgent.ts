@@ -1,15 +1,18 @@
 
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
-const apiKey = process.env.GEMINI_API_KEY!;
-const genAI = new GoogleGenerativeAI(apiKey);
+let genAI: GoogleGenerativeAI | null = null;
 
-export const model = genAI.getGenerativeModel({
-  model: "gemini-3-pro-preview",
-  generationConfig: {
-    temperature: 0.7,
-  },
-});
+export const getModel = () => {
+  if (!genAI) {
+    const apiKey = process.env.GEMINI_API_KEY!;
+    // console.log("geminiAgent: Key length:", apiKey?.length);
+    genAI = new GoogleGenerativeAI(apiKey);
+  }
+  return genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+  });
+};
 
 export const SYSTEM_PROMPT = `You are a Personal AI Mental Health Support Agent for youth.
 

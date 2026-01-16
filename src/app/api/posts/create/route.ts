@@ -1,6 +1,7 @@
 // app/api/posts/create/route.ts
 import { NextResponse } from "next/server";
 import { pool } from "@/lib/neon";
+import { getModel } from "@/lib/geminiAgent";
 
 export const runtime = "nodejs";
 
@@ -187,6 +188,50 @@ export async function POST(req: Request) {
 
     await client.query("COMMIT");
 
+    // --- AI AUTO-COMMENT (Gemini 2.5 Flash) ---
+    // We do this *after* commit so user gets fast response, 
+    // but practically we want it in the DB. 
+    // Ideally we might want to do this async/background, but for now we'll await it 
+    // or we can fire-and-forget (but then we risk losing it). 
+    // Given the request "automatically the first comment", we'll do it before returning.
+
+    try {
+      // 1. Generate comment
+      const prompt = `You are a compassionate, supportive, and non-judgmental mental health companion.
+      A user has just posted this in a community support feed:
+      "${content}"
+
+      Please generate a short, warm, and empathetic first comment to show them they are heard and supported.
+      - Keep it under 280 characters.
+      - Do NOT give medical advice.
+      - Focus on validation and kindness.
+      - Sound human-like but professional.
+      `;
+
+      const model = getModel();
+      const result = await model.generateContent(prompt);
+      const aiResponse = result.response.text().trim();
+
+      if (aiResponse) {
+        // 2. Insert comment (user_id is null for AI/System)
+        // Re-connect specifically for this logical unit if previous client released? 
+        // Actually we are inside the function, the client is still acquired but we committed the transaction.
+        // We can start a new transaction or just query.
+
+        // Note: The `client` variable is still valid, we just need to ensure `client.release()` happens in finally.
+        await client.query(
+          `INSERT INTO community_comments (post_id, user_id, content, created_at)
+           VALUES ($1, $2, $3, now())`,
+          [postId, null, aiResponse]
+        );
+        console.log(`[create] Added AI comment to post ${postId}`);
+      }
+    } catch (aiError) {
+      console.error("[create] Failed to generate AI comment:", aiError);
+      // We do NOT fail the request if AI fails, just log it.
+    }
+    // ------------------------------------------
+
     return NextResponse.json({
       post: {
         id: postId,
@@ -199,7 +244,7 @@ export async function POST(req: Request) {
   } catch (err: any) {
     try {
       await client.query("ROLLBACK");
-    } catch (_) {}
+    } catch (_) { }
     console.error("[create] error:", err);
     return NextResponse.json({ error: String(err?.message ?? err) }, { status: 500 });
   } finally {

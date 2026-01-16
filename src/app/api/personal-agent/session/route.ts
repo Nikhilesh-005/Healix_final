@@ -4,7 +4,7 @@ import { db } from "@/db";
 import { personal_sessions, personal_messages } from "@/db/schema"; // Ensure schema export
 import { auth } from "@/lib/auth";
 import { eq, desc } from "drizzle-orm";
-import { model, REPORT_PROMPT } from "@/lib/geminiAgent";
+import { getModel, REPORT_PROMPT } from "@/lib/geminiAgent";
 
 export async function POST(req: Request) {
     // START SESSION
@@ -139,6 +139,7 @@ IMPORTANT: Return ONLY the JSON object. Do not include markdown formatting or ba
         // 4. Generate Report
         let reportData: any = {};
         try {
+            const model = getModel();
             const result = await model.generateContent(detailedPrompt);
             const responseText = result.response.text();
 
