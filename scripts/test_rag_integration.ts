@@ -1,5 +1,7 @@
 
 import { getRelevantContext } from "../src/lib/rag";
+import dotenv from "dotenv";
+dotenv.config();
 
 async function testRag() {
     console.log("Testing RAG Integration...");

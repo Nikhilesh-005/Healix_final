@@ -1,67 +1,95 @@
 
-import { exec } from "child_process";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import fs from "fs";
 import path from "path";
-import util from "util";
 
-const execPromise = util.promisify(exec);
+// Initialize Gemini (lazy load inside function to ensure env is ready)
 
-interface RagMatch {
-    distance: number;
+interface EmbeddingItem {
     text: string;
     metadata: {
         tag: string;
         responses: string[];
         matched_pattern: string;
+    };
+    embedding: number[];
+}
+
+let cachedEmbeddings: EmbeddingItem[] | null = null;
+
+function loadEmbeddings(): EmbeddingItem[] {
+    if (cachedEmbeddings) return cachedEmbeddings;
+
+    try {
+        const filePath = path.join(process.cwd(), "rag", "embeddings.json");
+        if (!fs.existsSync(filePath)) {
+            console.error("❌ Embeddings file not found at:", filePath);
+            return [];
+        }
+        const raw = fs.readFileSync(filePath, "utf-8");
+        cachedEmbeddings = JSON.parse(raw);
+        return cachedEmbeddings || [];
+    } catch (error) {
+        console.error("Failed to load embeddings:", error);
+        return [];
     }
 }
 
-interface RagResponse {
-    matches: RagMatch[];
-    error?: string;
+function cosineSimilarity(vecA: number[], vecB: number[]): number {
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 export async function getRelevantContext(query: string): Promise<string> {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        console.error("GEMINI_API_KEY not set");
+        return "";
+    }
+
     try {
-        // Resolve path to script
-        // Assuming running from project root
-        const scriptPath = path.join(process.cwd(), "scripts", "query_index.py");
+        // 1. Generate Query Embedding
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
 
-        // Escape query to prevent shell injection issues (basic)
-        const safeQuery = query.replace(/"/g, '\\"');
+        const result = await model.embedContent(query);
+        const queryEmbedding = result.embedding.values;
 
-        // Execute python script
-        // Using 'python' - ensure it's in PATH or use process.env.PYTHON_PATH
-        const command = `python "${scriptPath}" "${safeQuery}"`;
-
-        console.log(`Executing RAG query: ${command}`);
-        const { stdout, stderr } = await execPromise(command);
-
-        if (stderr && stderr.length > 0) {
-            // Python warnings often go to stderr, so we don't always fail, but log it
-            // console.warn("RAG Script stderr:", stderr); 
-        }
-
-        const data: RagResponse = JSON.parse(stdout.trim());
-
-        if (data.error) {
-            console.error("RAG Error:", data.error);
+        // 2. Load Data
+        const embeddings = loadEmbeddings();
+        if (embeddings.length === 0) {
+            console.warn("No embeddings loaded for RAG.");
             return "";
         }
 
-        if (!data.matches || data.matches.length === 0) {
-            return "";
-        }
+        // 3. Search
+        const scored = embeddings.map(item => ({
+            item,
+            score: cosineSimilarity(queryEmbedding, item.embedding)
+        }));
 
-        // Format context for the LLM
-        // We want to give the model the "intent"(tag) and suggested "responses" + original user "pattern"
-        // This helps it style its answer like the dataset or use the specific advice.
+        // Sort by descending score
+        scored.sort((a, b) => b.score - a.score);
 
-        const contextLines = data.matches.map(match => {
-            const responses = match.metadata.responses.join(" | ");
-            return `Context Tag: [${match.metadata.tag}]
-Similar Previous User Input: "${match.metadata.matched_pattern}"
+        // Top 3 results
+        const topK = scored.slice(0, 3);
+
+        // 4. Format Context
+        const contextLines = topK.map(match => {
+            const responses = match.item.metadata.responses.join(" | ");
+            return `Context Tag: [${match.item.metadata.tag}]
+Similar Previous User Input: "${match.item.metadata.matched_pattern}" (Similarity: ${match.score.toFixed(2)})
 Verified Therapeutic Responses: "${responses}"`;
         });
+
+        console.log(`RAG matched top item: ${topK[0]?.item.metadata.tag} with score ${topK[0]?.score}`);
 
         return contextLines.join("\n\n");
 
