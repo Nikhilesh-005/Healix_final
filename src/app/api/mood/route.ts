@@ -11,7 +11,6 @@ import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
 
 /* ----------------- Env names / defaults ----------------- */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL ?? "gemini-1.5-flash"; // updated to latest stable flash if available, or fallback
 
 /** Day range in Asia/Kolkata */
 function getKolkataDayRange(now = new Date()) {
@@ -70,6 +69,13 @@ function scoreToCredits(score: number): number {
 /**
  * Call Gemini to get both quote and sentiment in one go.
  */
+// Define models to try in order
+const MOOD_MODELS = ["gemini-2.5-flash", "gemini-3.0-pro"];
+
+/**
+ * Call Gemini to get both quote and sentiment in one go.
+ * Tries multiple models in sequence for fallback.
+ */
 async function analyzeMoodWithGemini(moodText: string) {
   if (!GEMINI_API_KEY) {
     console.error("GEMINI_API_KEY not set");
@@ -77,62 +83,77 @@ async function analyzeMoodWithGemini(moodText: string) {
   }
 
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-  const model = genAI.getGenerativeModel({
-    model: GEMINI_MODEL,
-    generationConfig: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: SchemaType.OBJECT,
-        properties: {
-          quote: {
-            type: SchemaType.STRING,
-            description: "A famous quote matching the mood."
-          },
-          author: {
-            type: SchemaType.STRING,
-            description: "The author of the quote."
-          },
-          sentimentScore: {
-            type: SchemaType.NUMBER,
-            description: "Sentiment score from 1 (very negative) to 5 (very positive)."
-          },
-          sentimentConfidence: {
-            type: SchemaType.NUMBER,
-            description: "Confidence of the sentiment analysis from 0.0 to 1.0.",
+
+  let lastError: any = null;
+
+  for (const modelName of MOOD_MODELS) {
+    try {
+      console.log(`[MoodTracker] Attempting with model: ${modelName}`);
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: SchemaType.OBJECT,
+            properties: {
+              quote: {
+                type: SchemaType.STRING,
+                description: "A famous quote matching the mood."
+              },
+              author: {
+                type: SchemaType.STRING,
+                description: "The author of the quote."
+              },
+              sentimentScore: {
+                type: SchemaType.NUMBER,
+                description: "Sentiment score from 1 (very negative) to 5 (very positive)."
+              },
+              sentimentConfidence: {
+                type: SchemaType.NUMBER,
+                description: "Confidence of the sentiment analysis from 0.0 to 1.0.",
+              }
+            },
+            required: ["quote", "author", "sentimentScore", "sentimentConfidence"]
           }
-        },
-        required: ["quote", "author", "sentimentScore", "sentimentConfidence"]
-      }
+        }
+      });
+
+      const prompt = `
+        User mood: "${moodText}".
+    
+        1. Analyze the sentiment of this mood text and assign a score:
+           1 = Very Negative (Despair, deep sadness, anger)
+           2 = Negative (Sad, anxious, frustrated)
+           3 = Neutral (Okay, board, indifferent)
+           4 = Positive (Happy, hopeful, content)
+           5 = Very Positive (Ecstatic, grateful, excited)
+        
+        2. Find a FAMOUS quote that best matches this mood to help the user.
+           - If the mood is negative, provide something motivating, comforting, or hopeful.
+           - If the mood is positive, provide something uplifting or celebrating.
+           - The quote should be by a well-known Indian personality (historical or contemporary).
+           - Do NOT invent quotes.
+        
+        Return JSON with 'quote', 'author', 'sentimentScore' (1-5), and 'sentimentConfidence' (0-1).
+      `;
+
+      const result = await model.generateContent(prompt);
+      const response = result.response;
+      const text = response.text();
+
+      // If we got here, it worked
+      return { text, model: modelName };
+
+    } catch (err: any) {
+      console.warn(`[MoodTracker] Failed with model ${modelName}:`, err.message);
+      lastError = err;
+      // Continue to next model
     }
-  });
-
-  const prompt = `
-    User mood: "${moodText}".
-
-    1. Analyze the sentiment of this mood text and assign a score:
-       1 = Very Negative (Despair, deep sadness, anger)
-       2 = Negative (Sad, anxious, frustrated)
-       3 = Neutral (Okay, board, indifferent)
-       4 = Positive (Happy, hopeful, content)
-       5 = Very Positive (Ecstatic, grateful, excited)
-    
-    2. Find a FAMOUS quote that best matches this mood to help the user.
-       - If the mood is negative, provide something motivating, comforting, or hopeful.
-       - If the mood is positive, provide something uplifting or celebrating.
-       - The quote should be by a well-known Indian personality (historical or contemporary).
-       - Do NOT invent quotes.
-    
-    Return JSON with 'quote', 'author', 'sentimentScore' (1-5), and 'sentimentConfidence' (0-1).
-  `;
-
-  try {
-    const result = await model.generateContent(prompt);
-    const response = result.response;
-    return response.text();
-  } catch (err: any) {
-    console.error("Gemini generation error:", err);
-    throw err;
   }
+
+  // If loop finishes without returning, throw the last error
+  console.error("[MoodTracker] All models failed.");
+  throw lastError || new Error("All Gemini models failed to generate response.");
 }
 
 export async function GET(request: Request) {
@@ -172,8 +193,8 @@ export async function POST(request: Request) {
   let rawGemini: any = null;
 
   try {
-    const jsonStr = await analyzeMoodWithGemini(moodText);
-    rawGemini = jsonStr; // for debug
+    const { text: jsonStr, model: usedModel } = await analyzeMoodWithGemini(moodText);
+    rawGemini = { json: jsonStr, model: usedModel }; // for debug
     if (jsonStr) {
       const parsed = JSON.parse(jsonStr);
       if (parsed.quote && parsed.author) {

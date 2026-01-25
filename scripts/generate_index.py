@@ -7,7 +7,7 @@ import os
 import sys
 
 # Configuration
-DATA_PATH = "../../mental_data.json"  # Relative to scripts/ folder
+DATA_PATH = "../mental_data.json"  # Relative to scripts/ folder
 INDEX_DIR = "data/vector_store"
 MODEL_NAME = "all-mpnet-base-v2"
 

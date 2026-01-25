@@ -151,6 +151,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({ imageUrl, email, userId }) =>
               <form onSubmit={onSubmit} className="w-full max-w-md">
                 <div className="flex flex-col">
                   <input
+                    suppressHydrationWarning
                     className="w-full px-6 py-3 placeholder-white/80 bg-black/40 backdrop-blur-sm text-white rounded-full outline-none
                              transition-all duration-300 focus:w-full shadow-md border border-white/10"
                     placeholder="How do you feel today?"
@@ -171,6 +172,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({ imageUrl, email, userId }) =>
                   {errorMsg && <div className="mt-2 text-xs text-red-400">{errorMsg}</div>}
                   <div className="mt-3 flex justify-end">
                     <button
+                      suppressHydrationWarning
                       type="button"
                       onClick={() => onSubmit()}
                       className="text-sm px-3 py-1 rounded-full bg-white/90 text-black font-medium shadow"
